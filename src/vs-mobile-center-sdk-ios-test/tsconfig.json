@@ -1,0 +1,18 @@
+﻿{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es5",
+    "sourceMap": false,
+    "removeComments": false,
+    "isolatedModules": false,
+    "declaration": true,
+    "noEmitOnError": true,
+    "noResolve": false,
+    "pretty": true,
+    "rootDir": "./",
+    "outDir": "../../lib/vs-mobile-center-sdk-ios-test"
+  },
+  "filesGlob": [
+    "**/*.ts"
+  ]
+}
