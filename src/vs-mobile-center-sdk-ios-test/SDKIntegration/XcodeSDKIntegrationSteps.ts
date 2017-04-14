@@ -117,13 +117,13 @@ class AddCocoapodsDependencies extends SDKIntegrationStep {
         if (Helpers.endsWith(this.context.appDelegateFile.name, ".swift")) {
             this.nextStep = new InsertSDKInAppDelegateSwift();
         } else {
-            //this.nextStep = new InsertSDKInAppDelegateObjectiveC();
+            this.nextStep = new InsertSDKInAppDelegateObjectiveC();
         }
     }
 
     private getContent(podFile: IVCSRepositoryFileEntry): string {
         if (!FS.existsSync(podFile.fullPath)) {
-            return `target '${this.context.projectName}' do\r\n  use_frameworks!\r\nend`;
+            return `platform :ios, '8.0'\r\ntarget '${this.context.projectName}' do\r\n  use_frameworks!\r\nend`;
         } else {
             return FS.readFileSync(podFile.fullPath, "utf8");
         }
@@ -441,6 +441,147 @@ class TextWalkerSwiftInjectBag extends TextWalkerCBag {
     isWithinApplicationMethod: boolean = false;
     applicationFuncStartIndex: number = -1;
     endOfImportBlockIndex: number = -1;
+    applicationFuncEndIndex: number = -1;
+    msMobileCenterStartCallStartIndex: number = -1;
+    msMobileCenterStartCallLength: number = -1;
+}
+
+class InsertSDKInAppDelegateObjectiveC extends SDKIntegrationStep {
+    protected step() {
+        let appDelegateContent = FS.readFileSync(this.context.appDelegateFile.fullPath, "utf8");
+        const bag = this.analyze(appDelegateContent);
+
+        // Need to keep this insertion order to avoid index shifting.
+        appDelegateContent = this.insertStart(bag, appDelegateContent);
+        appDelegateContent = this.insertImports(bag, appDelegateContent);
+        this.context.actions.push(() => FS.writeFileSync(this.context.appDelegateFile.fullPath, appDelegateContent, { encoding: "utf8" }));
+    }
+
+    private analyze(appDelegateContent: string): TextWalkerObjectiveCInjectBag {
+        const textWalker = new TextWalkerC(appDelegateContent, new TextWalkerObjectiveCInjectBag());
+        textWalker.addTrap(bag => bag.significant
+            && bag.blockLevel === 0
+            && !bag.isWithinImplementation
+            && /[@#]import\s+?[\w"<>\/\.]+?;?\r\n$/.test(textWalker.backpart),
+            bag => {
+                bag.endOfImportBlockIndex = textWalker.position;
+            });
+        textWalker.addTrap(bag =>
+            bag.significant
+            && bag.blockLevel === 0
+            && Helpers.startsWith(textWalker.forepart, "@implementation"),
+            bag => {
+                const matches = /^@implementation\s+?AppDelegate\r\n/.exec(textWalker.forepart);
+                if (matches && matches[0]) {
+                    bag.isWithinImplementation = true;
+                    bag.wasWithinImplementation = true;
+                }
+            });
+        textWalker.addTrap(
+            bag =>
+                bag.significant
+                && bag.blockLevel === 0
+                && bag.isWithinImplementation
+                && textWalker.currentChar === "@"
+                && Helpers.startsWith(textWalker.forepart, "@end"),
+            bag => bag.isWithinImplementation = false
+        );
+        textWalker.addTrap(
+            bag =>
+                bag.significant
+                && bag.isWithinImplementation
+                && bag.blockLevel === 1
+                && bag.applicationFuncStartIndex < 0
+                && textWalker.currentChar === '{',
+            bag => {
+                const matches = /-\s*?\(\s*?[\w\.]+?\s*?\)\s*application(?!\w)[\s\S]*?$/.exec(textWalker.backpart)
+                if (matches) {
+                    bag.applicationFuncStartIndex = textWalker.position + 1;
+                    bag.isWithinApplicationMethod = true;
+                }
+            }
+        );
+        textWalker.addTrap(
+            bag =>
+                bag.significant
+                && bag.blockLevel === 0
+                && bag.isWithinApplicationMethod
+                && textWalker.currentChar === "}",
+            bag => {
+                bag.applicationFuncEndIndex = textWalker.position;
+                bag.isWithinApplicationMethod = false;
+            }
+        );
+        textWalker.addTrap(
+            bag => bag.significant
+                && bag.isWithinApplicationMethod
+                && bag.msMobileCenterStartCallStartIndex < 0
+                && /^\[\s*?MSMobileCenter\s+?start/.test(textWalker.forepart),
+            bag => {
+                let match = /^\[\s*?MSMobileCenter\s+?start\s*?:[\s\S]+?withServices[\s\S]+?\]\s*\]\s*?;/.exec(textWalker.forepart);
+                if (match) {
+                    bag.msMobileCenterStartCallStartIndex = textWalker.position;
+                    bag.msMobileCenterStartCallLength = match[0].length;
+                    match = /(\r\n|) *?$/.exec(textWalker.backpart);
+                    if (match) {
+                        bag.msMobileCenterStartCallStartIndex -= match[0].length;
+                        bag.msMobileCenterStartCallLength += match[0].length;
+                    }
+                }
+            });
+        return textWalker.walk();
+    }
+
+    private insertImports(bag: TextWalkerObjectiveCInjectBag, appDelegateContent: string): string {
+        if (bag.endOfImportBlockIndex < 0) {
+            bag.endOfImportBlockIndex = 0;
+        }
+
+        const imports: string[] = [];
+        this.addImportIfNotExists(appDelegateContent, bag.endOfImportBlockIndex, imports, "MobileCenter");
+        this.callIfSdkPartEnabled(
+            () => this.addImportIfNotExists(appDelegateContent, bag.endOfImportBlockIndex, imports, "MobileCenterAnalytics"),
+            () => this.addImportIfNotExists(appDelegateContent, bag.endOfImportBlockIndex, imports, "MobileCenterCrashes"),
+            () => this.addImportIfNotExists(appDelegateContent, bag.endOfImportBlockIndex, imports, "MobileCenterDistribute"));
+
+        const importsString = imports.map(x => `@import ${x};\r\n`).join("");
+        appDelegateContent = Helpers.splice(appDelegateContent, bag.endOfImportBlockIndex, 0, importsString);
+        return appDelegateContent;
+    }
+
+    private addImportIfNotExists(appDelegateContent: string, index: number, imports: string[], item: string) {
+        if (!new RegExp(`@import +${item} *?;\r\n`).test(appDelegateContent.substr(0, index))) {
+            imports.push(item);
+        }
+    }
+
+    private insertStart(bag: TextWalkerObjectiveCInjectBag, appDelegateContent: string): string {
+        if (bag.applicationFuncStartIndex < 0) {
+            throw new Error("Function 'application' is not defined in AppDelegate");
+        }
+
+        if (bag.msMobileCenterStartCallStartIndex >= 0) {
+            appDelegateContent = Helpers.splice(appDelegateContent, bag.msMobileCenterStartCallStartIndex, bag.msMobileCenterStartCallLength, "");
+        }
+
+        const services: string[] = [];
+        this.callIfSdkPartEnabled(
+            () => services.push("[MSAnalytics class]"),
+            () => services.push("[MSCrashes class]"),
+            () => services.push("[MSDistribute class]"));
+
+        const start = `[MSMobileCenter start:@"${this.context.applicationToken}" withServices:@[${services.join(", ")}]];`
+        appDelegateContent = Helpers.splice(appDelegateContent, bag.applicationFuncStartIndex, 0, `\r\n    ${start}`);
+        return appDelegateContent;
+    }
+}
+
+class TextWalkerObjectiveCInjectBag extends TextWalkerCBag {
+    isWithinImplementation: boolean = false;
+    wasWithinImplementation: boolean = false;
+    endOfImportBlockIndex: number = -1;
+    applicationFuncStartIndex: number = -1;
+    isWithinApplicationMethod: boolean = false;
     applicationFuncEndIndex: number = -1;
     msMobileCenterStartCallStartIndex: number = -1;
     msMobileCenterStartCallLength: number = -1;
