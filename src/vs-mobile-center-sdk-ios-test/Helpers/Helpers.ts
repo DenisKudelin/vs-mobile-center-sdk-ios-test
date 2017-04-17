@@ -19,3 +19,7 @@ export function findIndex<T>(array: Array<T>, predicate: (item: T) => boolean) {
 
     return -1;
 }
+
+export function escapeRegExp(str: string) {
+    return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
+}

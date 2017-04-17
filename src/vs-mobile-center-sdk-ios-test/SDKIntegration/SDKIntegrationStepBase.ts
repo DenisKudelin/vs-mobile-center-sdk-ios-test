@@ -1,4 +1,5 @@
 ﻿import * as Promise from "bluebird";
+import * as Globule from "globule";
 
 export abstract class SDKIntegrationStepBase<T> {
     protected nextStep: SDKIntegrationStepBase<T>;
@@ -17,5 +18,17 @@ export abstract class SDKIntegrationStepBase<T> {
         if (this.nextStep) {
             return this.nextStep.run(this.context);
         }
+    }
+}
+
+export class SDKIntegrationError {
+    public message: string;
+
+    constructor(message: string) {
+        this.message = message;
+    }
+
+    public toString() {
+        return this.message;
     }
 }

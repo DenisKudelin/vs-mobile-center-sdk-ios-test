@@ -1,5 +1,4 @@
 ﻿import * as FS from "fs";
-import { VCSRepository } from "./VCSRepository/VCSRepository";
 import { runXcodeSDKIntegration, MobileCenterSDKModule } from "./SDKIntegration/XcodeSDKIntegrationSteps";
 
 const errors: string[] = [];
@@ -18,6 +17,10 @@ let sdkModules: MobileCenterSDKModule;//= MobileCenterSDKModule.Analytics | Mobi
 sdkModules |= getParameterIfDefined("--analytics", MobileCenterSDKModule.Analytics);
 sdkModules |= getParameterIfDefined("--crashes", MobileCenterSDKModule.Crashes);
 sdkModules |= getParameterIfDefined("--distribute", MobileCenterSDKModule.Distribute);
+
+if (!sdkModules) {
+    errors.push('Please specify sdk modules.');
+}
 
 function getParameterValue(name: string): string {
     const index = process.argv.indexOf(name);
